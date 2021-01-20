@@ -22,6 +22,7 @@ typedef struct publisher {
     sem_t full;
     sem_t empty;
     pthread_mutex_t lock;
+    pthread_t *threads;
     int rear;
     int front;
     int total_book_count;
@@ -31,6 +32,17 @@ typedef struct book {
     int bookid;
     int typeid;
 } Book;
+
+typedef struct publisherargs {
+    int publisherid;
+    Publisher *publisher;
+
+} PublisherArgs;
+
+typedef struct packagerargs {
+    int packagerid;
+    Publisher **publishers;
+} PackagerArgs;
 
 void init_book(Publisher *publisher, Book **out) {
     (*out) = malloc(sizeof(Book));
@@ -42,6 +54,7 @@ void init_buffer(Publisher *publisher) {
     printf("DEBUG: Allocating memory for buffer %d\n", publisher->id);
     publisher->buflen = buffer_size;
     publisher->buffer = calloc(publisher->buflen, sizeof(Book *));
+    publisher->threads = calloc(publisher_thread_count, sizeof(pthread_t));
     printf("DEBUG: Initializing rear/front values and book count for buffer %d", publisher->id);
     publisher->rear = 0;
     publisher->front = 0;
@@ -59,7 +72,7 @@ void init(Publisher **out) {
     for (int i = 0; i < publisher_type; ++i) {
         printf("DEBUG: Initializing values for publisher type %d\n", i);
         Publisher *publisher = malloc(sizeof(Publisher));
-        publisher->id = i;
+        publisher->id = i + 1;
         init_buffer(publisher);
         out[i] = publisher;
     }
@@ -112,6 +125,8 @@ void enqueue(Publisher *publisher, Book *value) {
         resizebuffer(publisher, publisher->buflen);
         sem_getvalue(&publisher->empty, &semval);
         printf("DEBUG: Semaphore value after resize: %d\n", semval);
+        sem_wait(&publisher->empty);
+        printf("DEBUG: Semaphore value decreased by 1\n");
     }
     printf("DEBUG: Locking mutex for enqueue\n");
     // Lock the mutex for the buffer before writing to it.
@@ -121,8 +136,8 @@ void enqueue(Publisher *publisher, Book *value) {
         fprintf(stderr, "ERROR: Integer was already overflowed when trying to queue value to buffer %d\n", publisher->id);
         exit(-1);
     }
-    printf("DEBUG: Adding Book%d_%d to buffer %d position %d\n", value->typeid, value->bookid, publisher->id, bufferwriteindex);
     value->bookid = ++publisher->total_book_count;
+    printf("DEBUG: Adding Book%d_%d to buffer %d position %d\n", value->typeid, value->bookid, publisher->id, bufferwriteindex);
     publisher->buffer[bufferwriteindex] = value;
     printf("DEBUG: Unlocking mutex after enqueue\n");
     // Unlock the mutex after writing to the buffer is done.
@@ -134,7 +149,26 @@ void enqueue(Publisher *publisher, Book *value) {
 
 Book *dequeue(Publisher *publisher) {
     printf("DEBUG: Waiting for items in buffer (if needed)\n");
-    sem_wait(&publisher->full); // Waits if there are no items left in the buffer.
+    int semval = 0;
+    sem_getvalue(&publisher->full, &semval);
+    printf("!!!!!!!!!!!!!!!!!!!DEQUE Semaphore before trywait: %d\n", semval);
+    int semtrywaitsuccess = sem_trywait(&publisher->full);
+    sem_getvalue(&publisher->full, &semval);
+    printf("!!!!!!!!!!!!!!!!!!!!DEQUE Semaphore after trywait: %d\n", semval);
+
+    if (semtrywaitsuccess == -1 && errno == EAGAIN) { // sem_trywait() will return -1 and errno will be EAGAIN if semaphore is 0
+        int threadsarealive = 0;
+        for (int i = 0; i < publisher_thread_count; ++i) {
+            if (publisher->threads[i] != 0) {
+                sem_wait(&publisher->full); // Wait until buffer has items again.
+                threadsarealive = 1;
+            }
+        }
+        if (threadsarealive) {
+
+        }
+        return NULL;
+    }
     printf("DEBUG: Locking mutex for dequeue\n");
     pthread_mutex_lock(&publisher->lock);
     int bufferreadindex = (publisher->front++) % publisher->buflen;
@@ -152,11 +186,75 @@ Book *dequeue(Publisher *publisher) {
 }
 
 void *publish(void *arg) {
-    Publisher *publisher = (Publisher *) arg;
+    PublisherArgs publisherArgs = *(PublisherArgs *) arg;
+    Publisher *publisher = publisherArgs.publisher;
+    int publisherid = publisherArgs.publisherid;
     for (int i = 0; i < book_per_thread; ++i) {
         Book *book;
         init_book(publisher, &book);
         enqueue(publisher, book);
+    }
+    printf("Publisher %d of type %d\t\tFinished publishing %d books. Exiting the system.", publisherid, publisher->id, book_per_thread);
+    return NULL;
+}
+
+void *package(void *arg) {
+    PackagerArgs *packager_args = (PackagerArgs *) arg;
+    int packagerid = packager_args->packagerid;
+    Publisher **publishers = packager_args->publishers;
+    Book *books[package_size];
+    int i = 0;
+    int nonemptyidcount = publisher_type;
+    int nonemptyids[nonemptyidcount];
+    for (int j = 0; j < publisher_type; ++j) {
+        nonemptyids[j] = j;
+    }
+    while (i < package_size) {
+        int random_publisher_id = nonemptyids[rand() % nonemptyidcount];
+        printf("DEBUG: Random Publisher Id: %d\n", random_publisher_id);
+        Publisher *publisher = publishers[random_publisher_id];
+        printf("before dequeue\n");
+        Book *returnval = dequeue(publisher);
+        printf("exit dequeue\n");
+        if (returnval == NULL) { // Buffer was empty
+            nonemptyidcount -= 1;
+            if (nonemptyidcount == 0) { // All buffers are empty, all publishers are dead.
+                printf("There are no publishers left in the system. Only %d of %d number of books could be packaged. The package contains:\n\t\t\t\t\t\t", i, package_size);
+                for (int j = 0; j < i; ++j) { // TODO Check if all books are correctly printed
+                    if (j != i - 1) {
+                        printf("Book%d_%d, ", books[j]->typeid, books[j]->bookid);
+                    }
+                    else {
+                        printf("Book%d_%d.\n", books[j]->typeid, books[j]->bookid);
+                    }
+                }
+                printf("Exiting the system.\n");
+                pthread_exit(0);
+            }
+            for (int j = 0; j < nonemptyidcount; ++j) {
+                if (j < random_publisher_id) { // 0 1 2 3 4 5
+                    nonemptyids[j] = j;
+                }
+                else {
+                    nonemptyids[j] = j + 1;
+                }
+            }
+        }
+        else {
+            printf("Packager %d\t\t\tPut Book%d_%d into the package.\n", packagerid, returnval->typeid, returnval->bookid);
+            books[i] = returnval;
+            i++;
+        }
+    }
+    printf("Packager %d\t\t\tFinished preparing one package. The package contains:\n", packagerid);
+    printf("\t\t\t\t\t\t"); // TODO fix formatting here.
+    for (int j = 0; j < package_size; ++j) {
+        if (j != package_size - 1) {
+            printf("Book%d_%d, ", books[j]->typeid, books[j]->bookid);
+        }
+        else {
+            printf("Book%d_%d.\n", books[j]->typeid, books[j]->bookid);
+        }
     }
     return NULL;
 }
@@ -190,30 +288,32 @@ int main(int argc, char *argv[]) {
     Publisher *publishers[publisher_type];
     init(publishers);
 
-    pthread_t publisherthreads[publisher_type][publisher_thread_count];
     for (int i = 0; i < publisher_type; ++i) {
         for (int j = 0; j < publisher_thread_count; ++j) {
-            pthread_create(&publisherthreads[i][j], NULL, publish, publishers[i]);
+            PublisherArgs *publisherArgs = malloc(sizeof(PublisherArgs));
+            publisherArgs->publisher = publishers[i];
+            publisherArgs->publisherid = j + 1;
+            pthread_create(&publishers[i]->threads[j], NULL, publish, publisherArgs);
         }
     }
+
 
     pthread_t packagerthreads[packager_thread_count];
     for (int i = 0; i < packager_thread_count; ++i) {
-        pthread_create(&packagerthreads[i], NULL, package, ???);
+        PackagerArgs *packagerArgs = malloc(sizeof(PackagerArgs));
+        packagerArgs->packagerid = i;
+        packagerArgs->publishers = publishers;
+        pthread_create(&packagerthreads[i], NULL, package, packagerArgs);
     }
-
-    /*
-    Book *books[11];
-    for (int i = 0; i < 11; ++i) {
-        init_book(publishers[0], &books[i]);
-        enqueue(publishers[0], books[i]);
-    }
-     */
 
     for (int i = 0; i < publisher_type; ++i) {
         for (int j = 0; j < publisher_thread_count; ++j) {
-            pthread_join(publisherthreads[i][j], NULL);
+            pthread_join(publishers[i]->threads[j], NULL);
         }
+    }
+
+    for (int i = 0; i < packager_thread_count; ++i) {
+        pthread_join(packagerthreads[i], NULL);
     }
 
     printf("Execution complete.\n");
