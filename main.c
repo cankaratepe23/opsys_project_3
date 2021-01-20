@@ -5,13 +5,6 @@
 #include <errno.h>
 #include <string.h>
 
-/*
- * NOTES:
- * A Book struct is needed
- * How do we check if all publisher threads have exited?
- * Do we need a struct for publisher threads?
- */
-
 int publisher_type, publisher_thread_count, packager_thread_count, book_per_thread, package_size, buffer_size;
 
 // Publisher struct to hold information about publisher types, such as the id, or the current buffer size and location.
@@ -151,10 +144,10 @@ Book *dequeue(Publisher *publisher) {
     printf("DEBUG: Waiting for items in buffer (if needed)\n");
     int semval = 0;
     sem_getvalue(&publisher->full, &semval);
-    printf("!!!!!!!!!!!!!!!!!!!DEQUE Semaphore before trywait: %d\n", semval);
+    printf("DEBUG: Semaphore before trywait: %d\n", semval);
     int semtrywaitsuccess = sem_trywait(&publisher->full);
     sem_getvalue(&publisher->full, &semval);
-    printf("!!!!!!!!!!!!!!!!!!!!DEQUE Semaphore after trywait: %d\n", semval);
+    printf("DEBUG: Semaphore after trywait: %d\n", semval);
 
     if (semtrywaitsuccess == -1 && errno == EAGAIN) { // sem_trywait() will return -1 and errno will be EAGAIN if semaphore is 0
         int threadsarealive = 0;
