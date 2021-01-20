@@ -42,7 +42,7 @@ void init_book(Publisher *publisher, Book **out) {
 void init_buffer(Publisher *publisher) {
     printf("DEBUG: Allocating memory for buffer %d\n", publisher->id);
     publisher->buflen = buffer_size;
-    publisher->buffer = calloc(0, sizeof(Book *) * publisher->buflen);
+    publisher->buffer = calloc(publisher->buflen, sizeof(Book *));
     printf("DEBUG: Initializing rear/front values and book count for buffer %d", publisher->id);
     publisher->rear = 0;
     publisher->front = 0;
@@ -74,7 +74,7 @@ void resizebuffer(Publisher *publisher, int oldsize) {
     int oldrear = publisher->rear;
     int oldfront = publisher->front;
     // Allocate new memory for the buffer and set the buflen variable to the new size.
-    publisher->buffer = calloc(0, (sizeof (void *)) * (oldsize * 2));
+    publisher->buffer = calloc((oldsize * 2), (sizeof (Book **)));
     publisher->buflen = oldsize * 2;
     // Re-initialize the 'empty' semaphore with the number of newly created empty slots.
     sem_destroy(&publisher->empty);
