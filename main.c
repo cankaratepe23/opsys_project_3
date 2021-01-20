@@ -162,12 +162,12 @@ Book *dequeue(Publisher *publisher) {
             if (publisher->threads[i] != 0) {
                 sem_wait(&publisher->full); // Wait until buffer has items again.
                 threadsarealive = 1;
+                break;
             }
         }
-        if (threadsarealive) {
-
+        if (threadsarealive == 0) {
+            return NULL;
         }
-        return NULL;
     }
     printf("DEBUG: Locking mutex for dequeue\n");
     pthread_mutex_lock(&publisher->lock);
