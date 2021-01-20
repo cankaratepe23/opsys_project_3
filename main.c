@@ -34,7 +34,6 @@ typedef struct book {
 
 void init_book(Publisher *publisher, Book **out) {
     (*out) = malloc(sizeof(Book));
-    (*out)->bookid = ++publisher->total_book_count;
     (*out)->typeid = publisher->id;
 }
 
@@ -123,6 +122,7 @@ void enqueue(Publisher *publisher, Book *value) {
         exit(-1);
     }
     printf("DEBUG: Adding Book%d_%d to buffer %d position %d\n", value->typeid, value->bookid, publisher->id, bufferwriteindex);
+    value->bookid = ++publisher->total_book_count;
     publisher->buffer[bufferwriteindex] = value;
     printf("DEBUG: Unlocking mutex after enqueue\n");
     // Unlock the mutex after writing to the buffer is done.
@@ -151,8 +151,14 @@ Book *dequeue(Publisher *publisher) {
     return result;
 }
 
-void publish(Publisher *publisher) {
-    // TODO Implement
+void *publish(void *arg) {
+    Publisher *publisher = (Publisher *) arg;
+    for (int i = 0; i < book_per_thread; ++i) {
+        Book *book;
+        init_book(publisher, &book);
+        enqueue(publisher, book);
+    }
+    return NULL;
 }
 
 int main(int argc, char *argv[]) {
@@ -184,10 +190,30 @@ int main(int argc, char *argv[]) {
     Publisher *publishers[publisher_type];
     init(publishers);
 
+    pthread_t publisherthreads[publisher_type][publisher_thread_count];
+    for (int i = 0; i < publisher_type; ++i) {
+        for (int j = 0; j < publisher_thread_count; ++j) {
+            pthread_create(&publisherthreads[i][j], NULL, publish, publishers[i]);
+        }
+    }
+
+    pthread_t packagerthreads[packager_thread_count];
+    for (int i = 0; i < packager_thread_count; ++i) {
+        pthread_create(&packagerthreads[i], NULL, package, ???);
+    }
+
+    /*
     Book *books[11];
     for (int i = 0; i < 11; ++i) {
         init_book(publishers[0], &books[i]);
         enqueue(publishers[0], books[i]);
+    }
+     */
+
+    for (int i = 0; i < publisher_type; ++i) {
+        for (int j = 0; j < publisher_thread_count; ++j) {
+            pthread_join(publisherthreads[i][j], NULL);
+        }
     }
 
     printf("Execution complete.\n");
